@@ -21,6 +21,25 @@ import numpy as np
 DATAFILE = "digits.data"
 
 
+def paired_t_test(a, b):
+    k = len(a)
+    diff = 0
+    for i in xrange(k):
+        diff += a[i] - b[i]
+    avg_diff = diff / k
+    samp_var = 0
+    for i in xrange(k):
+        samp_var += (a[i] - b[i] - avg_diff)**2
+    samp_var /= k-1
+    std_dev = samp_var**.5
+    t = avg_diff / (std_dev / k**0.5)
+    print "t statistic = %f" % t
+    if abs(t) > 2.776:                               # t statistic for 4 dof two tailed
+        print "Difference is significant"
+    else:
+        print "Difference is not significant"
+
+
 def validate(trainer, dataset, n_folds, max_epochs):
     l = dataset.getLength()
     inp = dataset.getField("input")
@@ -123,7 +142,7 @@ def simple_network(data, digit, train_ds, test_ds):
     n.sortModules()
     trainer = BackpropTrainer(n, dataset=train_ds, momentum=0.1, verbose=True,
                               weightdecay=0.01)
-    trainer.trainUntilConvergence(maxEpochs=3)
+    trainer.trainUntilConvergence(maxEpochs=25)
     result = percentError(trainer.testOnClassData(dataset=test_ds),
                           test_ds['class'])
 #     result = validate(trainer, train_ds, 5, 10)
@@ -145,13 +164,58 @@ def one_hidden_layer(data, digit, train_ds, test_ds):
 #     n.sortModules()
     trainer = BackpropTrainer(n, dataset=train_ds, momentum=0.1,
                               weightdecay=0.01)
-    trainer.trainUntilConvergence(maxEpochs=3)
+    trainer.trainUntilConvergence(maxEpochs=25)
     result = percentError(trainer.testOnClassData(dataset=test_ds),
                           test_ds['class'])
     #result = validate(trainer, train_ds, 5, 10)
     print 'One hidden layer - Percent Error', result
     #score(n, data, train_ds)
-    return result 
+    return result
+
+def creative_network(data, digit, train_ds, test_ds):
+    # Create input vectors
+    n = FeedForwardNetwork()
+    inLayer = []
+    for i in xrange(64):
+        l = LinearLayer(1)
+        inLayer.append(l)
+        n.addInputModule(l)
+    
+    outLayer = SoftmaxLayer(10)
+    i = 0
+    j = 0
+    middleLayers = [SigmoidLayer(1) for x in xrange(16)]
+    
+    for layer in middleLayers:
+        n.addModule(layer)
+    n.addOutputModule(outLayer)
+    
+    while i < 55:
+        n.addConnection(FullConnection(inLayer[i], middleLayers[j]))
+        n.addConnection(FullConnection(inLayer[i+1], middleLayers[j]))
+        n.addConnection(FullConnection(inLayer[i+8], middleLayers[j]))
+        n.addConnection(FullConnection(inLayer[i+9], middleLayers[j]))
+        j += 1
+        i += 2
+        if (i % 16) >= 8:
+            i += 8
+    
+    for layer in middleLayers:
+        n.addConnection(FullConnection(layer, outLayer))
+        
+    n.sortModules()
+    
+    trainer = BackpropTrainer(n, dataset=train_ds, momentum=0.1,
+                              weightdecay=0.01)
+    trainer.trainUntilConvergence(maxEpochs=25)
+    result = percentError(trainer.testOnClassData(dataset=test_ds),
+                          test_ds['class'])
+    #result = validate(trainer, train_ds, 5, 10)
+    print 'Creative Network - Percent Error', result
+    #score(n, data, train_ds)
+    return result
+    
+        
 
 def read_data(file):
     with open(file) as f:
@@ -166,7 +230,18 @@ def read_data(file):
     
     return data, digit
 
-
+#Rearranges data to put 2x2 squares next to each other linearly
+# i.e. [i,i+1,i+8,i+9,i+2,i+3,i+10,i+11]... 
+def rearrange_data(data):
+    new = []
+    i = 0
+    while i < 55:
+        new.append(data[i])
+        new.append(data[i+1])
+        new.append(data[i+8])
+        new.append(data[i+9])
+    
+    
 def main():
     random.seed(50)
     data, digit = read_data(DATAFILE)
@@ -180,15 +255,16 @@ def main():
 #     
 #     simple_network(data, digit, ds)
 #     one_hidden_layer(data, digit, ds)
-    
-    perms = np.array_split(np.arange(len(data)), 10)
+    n_folds = 5
+    perms = np.array_split(np.arange(len(data)), n_folds)
     simple_results = []
     one_hl_results = []
-    for i in xrange(10):
+    creative_results = []
+    for i in xrange(n_folds):
         train_ds = ClassificationDataSet(64, 1, nb_classes = 10)
         test_ds = ClassificationDataSet(64, 1, nb_classes = 10)
         
-        train_perms_idxs = range(10)
+        train_perms_idxs = range(n_folds)
         train_perms_idxs.pop(i)
         temp_list = []
         for train_perms_idx in train_perms_idxs:
@@ -207,9 +283,23 @@ def main():
         
         simple_results.append(simple_network(data, digit, train_ds, test_ds))
         one_hl_results.append(one_hidden_layer(data, digit, train_ds, test_ds))
-    
+        creative_results.append(creative_network(data, digit, train_ds, test_ds))
+        
     for i in xrange(len(simple_results)):
-        print 'Simple %d : Hidden %d' % (simple_results[i], one_hl_results[i])
+        print 'Simple %f : Hidden %f : Creative %f' % (simple_results[i],
+                                                    one_hl_results[i],
+                                                    creative_results[i])
+    print 'Simple mean: %f' % np.mean(simple_results)
+    print 'One hidden layer mean: %f' % np.mean(one_hl_results)
+    print 'Creative mean : %f' % np.mean(creative_results)
+    
+     
+    print "Simple vs onehl"
+    paired_t_test(simple_results, one_hl_results)
+    print "simple vs creative"
+    paired_t_test(simple_results, creative_results)
+    print "onehl vs creative"
+    paired_t_test(one_hl_results, creative_results)
         
         
 
